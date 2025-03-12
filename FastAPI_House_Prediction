@@ -1,0 +1,108 @@
+from fastapi import FastAPI, Request, Form
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+import uvicorn
+import pickle
+import numpy as np
+import pandas as pd
+from pydantic import BaseModel
+
+app = FastAPI(title="House Price Prediction")
+
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+templates = Jinja2Templates(directory="templates")
+
+# Loadind the model
+try:
+    with open('home_price_prediction_model_BL.pickle', 'rb') as f:
+        model = pickle.load(f)
+
+    # Load location encoder if you have one
+    with open('location_encoder.pkl', 'rb') as f:
+        location_encoder = pickle.load(f)
+
+    # Sample locations (replace with your actual locations)
+    locations = sorted(location_encoder.classes_)
+except:
+    # For demonstration purposes, we'll create a dummy model
+    model = None
+    locations = ["Whitefield", "Sarjapur Road", "Electronic City", "Hebbal",
+                 "Bannerghatta Road", "Hennur", "Marathahalli", "Yelahanka"]
+
+
+
+# Define the input model
+class HousePredictionInput(BaseModel):
+    location: str
+    sqft: float
+    bath: int
+    bhk: int
+
+
+# Define the output model
+class HousePredictionOutput(BaseModel):
+    predicted_price: float
+
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "location": locations}
+    )
+
+
+@app.post("/predict")
+async def predict(
+        request: Request,
+        location: str = Form(...),
+        sqft: float = Form(...),
+        bath: int = Form(...),
+        bhk: int = Form(...)
+):
+    # Process the input
+    input_data = {
+        "location": location,
+        "sqft": sqft,
+        "bath": bath,
+        "bhk": bhk
+    }
+
+    # Make prediction
+    if model is not None:
+        # Transform location to one-hot encoding
+        loc_index = np.where(location_encoder.classes_ == location)[0][0]
+        loc_array = np.zeros(len(location_encoder.classes_))
+        loc_array[loc_index] = 1
+
+        # Create input array
+        features = np.concatenate([
+            loc_array,
+            np.array([sqft, bath, bhk]).reshape(1, -1)[0]
+        ])
+
+        # Make prediction
+        prediction = model.predict([features])[0]
+    else:
+        # Dummy prediction for demonstration
+        prediction = sqft * 1000 + bath * 50000 + bhk * 100000
+
+    # Format the prediction (in lakhs, assuming Indian real estate)
+    formatted_prediction = f"₹{prediction / 100000:.2f} Lakhs"
+
+    # Return the prediction
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "prediction": formatted_prediction,
+            "input": input_data,
+            "locations": locations
+        }
+    )
+
+
